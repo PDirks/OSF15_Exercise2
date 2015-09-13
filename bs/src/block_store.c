@@ -36,10 +36,17 @@ struct block_store {
     // add an fd for V2 for better disk stuff
 };
 
-// TODO: Comment
+/*
+ * PURPOSE: Create and allocate in memory a blockstore data type. Allocate all data members in the struct, as well as set all values to 0
+ * INPUTS:
+ *      void
+ * RETURN:
+ *      block_store pointer, with all data members fully allocated
+ **/
 block_store_t *block_store_create() {
     block_store_t *bs = malloc(sizeof(block_store_t));
     if (bs) {
+    	// begin allocating block_store data members, starting with free block map bitmap
         bs->fbm = bitmap_create(BLOCK_COUNT);
         if (bs->fbm) {
             bs->dbm = bitmap_create(BLOCK_COUNT);
@@ -47,26 +54,43 @@ block_store_t *block_store_create() {
                 // Eh, calloc, why not (technically a security risk if we don't)
                 bs->data_blocks = calloc(BLOCK_SIZE, BLOCK_COUNT - FBM_SIZE);
                 if (bs->data_blocks) {
+                	// iterate through free and dirty blockmaps, setting everything to 0
                     for (size_t idx = 0; idx < FBM_SIZE; ++idx) {
                         bitmap_set(bs->fbm, idx);
                         bitmap_set(bs->dbm, idx);
                     }
                     block_store_errno = BS_OK;
                     return bs;
-                }
+                }// end bs->data_blocks check
+
+			    // malloc failure, clear out dbm
                 bitmap_destroy(bs->dbm);
-            }
+                
+            }// end bs->dbm check
+
+		    // malloc failure, clear out fbm
             bitmap_destroy(bs->fbm);
-        }
+
+        }// end bs->fbm check
+
         free(bs);
-    }
+
+    }// end bs check
+    // malloc failure, throw error
     block_store_errno = BS_MEMORY;
     return NULL;
-}
+}// end block_store_create
 
-// TODO: Comment
+/*
+ * PURPOSE: free all members associated with a give block store
+ * INPUTS:
+ *      bs, the target block store to free
+ * RETURN:
+ *      void
+ **/
 void block_store_destroy(block_store_t *const bs) {
     if (bs) {
+    	// call bitmap_destory on all members of inputted block store
         bitmap_destroy(bs->fbm);
         bs->fbm = NULL;
         bitmap_destroy(bs->dbm);
@@ -78,13 +102,22 @@ void block_store_destroy(block_store_t *const bs) {
         return;
     }
     block_store_errno = BS_PARAM;
-}
+}// end block_store_destroy
 
-// TODO: Comment
+/*
+ * PURPOSE: Grab a free block from the free block map and note that it is being used
+ * INPUTS:
+ *      bs, the block store we'll search through to get a free block
+ * RETURN:
+ *      if success, returns memory adress of our free block
+ *		else, return 0
+ **/
 size_t block_store_allocate(block_store_t *const bs) {
     if (bs && bs->fbm) {
+    	// grab a free block from the free block map
         size_t free_block = bitmap_ffz(bs->fbm);
         if (free_block != SIZE_MAX) {
+        	// note in free block memory that our grabbed block is now used
             bitmap_set(bs->fbm, free_block);
             // not going to mark dbm because there's no change (yet)
             return free_block;
@@ -94,7 +127,7 @@ size_t block_store_allocate(block_store_t *const bs) {
     }
     block_store_errno = BS_PARAM;
     return 0;
-}
+}// end block_store_allocate
 
 /*
     // V2
@@ -114,28 +147,53 @@ size_t block_store_allocate(block_store_t *const bs) {
     }
 */
 
-// TODO: Comment
+/*
+ * PURPOSE: Free up an inputted block from the block store's block map
+ * INPUTS:
+ *      bs, the block store that holds the block map
+ *      block_id, our target block we're freeing
+ * RETURN:
+ *      our target block_id
+ **/
 size_t block_store_release(block_store_t *const bs, const size_t block_id) {
     if (bs && bs->fbm && BLOCKID_VALID(block_id)) {
         // we could clear the dirty bit, since the info is no longer in use but...
         // We'll keep it. Could be useful. Doesn't really hurt anything.
         // Keeps it more true to a standard block device.
         // You could also use this function to format the specified block for security reasons
+        
+        // note in free block memory that our target block_id is not being used anymore
         bitmap_reset(bs->fbm, block_id);
         block_store_errno = BS_OK;
         return block_id;
     }
     block_store_errno = BS_PARAM;
     return 0;
-}
+}// end block_store_release
 
-// TODO: Comment
+/*
+ * PURPOSE: Read from block memory by copying data across to buffer
+ * INPUTS:
+ *      bs, block store that holds all block information
+ *      block_id, target block to read
+ *		buffer, holds data copied from block map
+ *		nbytes, number of bytes to read
+ *		offset, how far from 0 do we start reading from?
+ * RETURN:
+ *      if success, return number of bytes to read
+ *		else, return 0
+ **/
 size_t block_store_read(const block_store_t *const bs, const size_t block_id, void *buffer, const size_t nbytes, const size_t offset) {
     if (bs && bs->fbm && bs->data_blocks && BLOCKID_VALID(block_id)
             && buffer && nbytes && (nbytes + offset <= BLOCK_SIZE)) {
         // Not going to forbid reading of not-in-use blocks (but we'll log it via errno)
+        
+        // compute total offset using offset & size of datatype
         size_t total_offset = offset + (BLOCK_SIZE * (block_id - FBM_SIZE));
+        
+        // copy info from block into buffer
         memcpy(buffer, (void *)(bs->data_blocks + total_offset), nbytes);
+        
         block_store_errno = bitmap_test(bs->fbm, block_id) ? BS_OK : BS_FBM_REQUEST_MISMATCH;
         return nbytes;
     }
@@ -144,17 +202,49 @@ size_t block_store_read(const block_store_t *const bs, const size_t block_id, vo
     // And technically the bs is a parameter...
     block_store_errno = BS_PARAM;
     return 0;
-}
+}// end block_store_read
 
 // TODO: Implement, comment, param check
 // Gotta take read in nbytes from the buffer and write it to the offset of the block
 // Pretty easy, actually
 // Gotta remember to mess with the DBM!
 // Let's allow writing to blocks not marked as in use as well, but log it like with read
+/*
+ * PURPOSE: Write data by copying buffer data over to memory
+ * INPUTS:
+ *      bs, block store that holds addresses to all our data
+ *		block_id, our target block to modify
+ *		buffer, holds data to be copied over
+ *		nbytes, number of bytes to copy
+ *      offset, how far from 0 we are to start writing
+ * RETURN:
+ *      if success, return number of bytes to read
+ *		else, return 0
+ **/
 size_t block_store_write(block_store_t *const bs, const size_t block_id, const void *buffer, const size_t nbytes, const size_t offset) {
+	// param check (note the dbm check)
+    if (bs && bs->fbm && bs->dbm && bs->data_blocks && BLOCKID_VALID(block_id)
+            && buffer && nbytes && (nbytes + offset <= BLOCK_SIZE)) {
+        // compute total offset using offset & size of datatype
+        size_t total_offset = offset + (BLOCK_SIZE * (block_id - FBM_SIZE));
+    
+    	// note in the dbm that we're using this block now 
+    	// follow-up:(do we need to set the block_id? or the total_offset?)
+        bitmap_set(bs->dbm, block_id);
+    
+        // copy info from buffer into block
+        memcpy((void *)(bs->data_blocks + total_offset), buffer, nbytes);
+        
+        // test out both the fbm and dbm since we're touching both in this fn...
+        block_store_errno = bitmap_test(bs->fbm, block_id) ? BS_OK : BS_FBM_REQUEST_MISMATCH;
+        block_store_errno = bitmap_test(bs->dbm, block_id) ? BS_OK : BS_FBM_REQUEST_MISMATCH;
+        return nbytes;
+    
+    }
+    // something wrong with parameters, note error in log and return 0
     block_store_errno = BS_FATAL;
     return 0;
-}
+}// end block_store_write
 
 // TODO: Implement, comment, param check
 // Gotta make a new BS object and read it from the file
@@ -164,12 +254,28 @@ size_t block_store_write(block_store_t *const bs, const size_t block_id, const v
 // There should be POSIX stuff for everything file-related
 // Probably going to have a lot of resource management, better be careful
 // Lots of different errors can happen
+/*
+ * PURPOSE:
+ * INPUTS:
+ *      
+ *      
+ * RETURN:
+ *      
+ **/
 block_store_t *block_store_import(const char *const filename) {
     block_store_errno = BS_FATAL;
     return NULL;
-}
+}// end block_store_import
 
 // TODO: Comment
+/*
+ * PURPOSE:
+ * INPUTS:
+ *      
+ *      
+ * RETURN:
+ *      
+ **/
 size_t block_store_export(const block_store_t *const bs, const char *const filename) {
     // Thankfully, this is less of a mess than import...
     // we're going to ignore dbm, we'll treat export like it's making a new copy of the drive
@@ -192,9 +298,15 @@ size_t block_store_export(const block_store_t *const bs, const char *const filen
     }
     block_store_errno = BS_PARAM;
     return 0;
-}
+}// end block_store_export
 
-// TODO: Comment
+/*
+ * PURPOSE: Returns an explanation for a given error code
+ * INPUTS:
+ *      bs_err, block store error to analyze
+ * RETURN:
+ *      string containing an explanaiton of the error
+ **/
 const char *block_store_strerror(block_store_status bs_err) {
     switch (bs_err) {
         case BS_OK:
@@ -224,7 +336,7 @@ const char *block_store_strerror(block_store_status bs_err) {
         default:
             return "???";
     }
-}
+}// end block_store_strerror
 
 
 // V2 idea:
@@ -235,11 +347,26 @@ const char *block_store_strerror(block_store_status bs_err) {
 //   but it's probably totally broken if the sync failed for whatever reason
 //   I guess a new export will fix that?
 
-
+/*
+ * PURPOSE:
+ * INPUTS:
+ *      
+ *      
+ * RETURN:
+ *      
+ **/
 size_t utility_read_file(const int fd, uint8_t *buffer, const size_t count) {
     return 0;
-}
+}// end utility_read_file
 
+/*
+ * PURPOSE:
+ * INPUTS:
+ *      
+ *      
+ * RETURN:
+ *      
+ **/
 size_t utility_write_file(const int fd, const uint8_t *buffer, const size_t count) {
     return 0;
-}
+}// end utility_write_file
