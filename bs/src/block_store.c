@@ -204,7 +204,6 @@ size_t block_store_read(const block_store_t *const bs, const size_t block_id, vo
     return 0;
 }// end block_store_read
 
-// TODO: Implement, comment, param check
 // Gotta take read in nbytes from the buffer and write it to the offset of the block
 // Pretty easy, actually
 // Gotta remember to mess with the DBM!
@@ -255,14 +254,34 @@ size_t block_store_write(block_store_t *const bs, const size_t block_id, const v
 // Probably going to have a lot of resource management, better be careful
 // Lots of different errors can happen
 /*
- * PURPOSE:
+ * PURPOSE: Create a new blockstore by reading it in from a saved file
  * INPUTS:
- *      
- *      
+ *      filename, location to read our blockstore data
  * RETURN:
- *      
+ *      new block store with all out data
  **/
 block_store_t *block_store_import(const char *const filename) {
+	if( filename ){
+		const int fd = open(filename, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP);
+        if (fd != -1) {
+			if ( block_store_t * bs = block_store_create() != NULL ){
+				// followup: check on count input, does it make sense? What is the buffer? bitmap_import()?
+				if ( utility_read_file(fd, , BLOCK_SIZE * (BLOCK_COUNT - FBM_SIZE)) == (BLOCK_SIZE * (BLOCK_COUNT - FBM_SIZE)) ){
+		    	
+		    	}
+			
+			}
+        }
+		block_store_errno = BS_FILE_IO;
+        close(fd);
+        return 0;
+	}
+	else{
+	    block_store_errno = BS_PARAM;
+	    return NULL;
+	}
+
+
     block_store_errno = BS_FATAL;
     return NULL;
 }// end block_store_import
